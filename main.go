@@ -117,13 +117,14 @@ func ReadTxsCSV(txpool *TxPool, done chan<- bool) {
 
 // GenerateBlock 负责打包交易并输出记录
 func GenerateBlock(txpool *TxPool, done <-chan bool) {
-	//time.Sleep(800 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 
 	taxpool := NewTaxPool()
 	blockNum := 1
 	csvFinished := false
 
 	for {
+		time.Sleep(20 * time.Millisecond)
 		txpool.lock.Lock()
 		length := len(txpool.TxQueue)
 		txpool.lock.Unlock()
@@ -139,12 +140,6 @@ func GenerateBlock(txpool *TxPool, done <-chan bool) {
 			default:
 				// CSV 还没读完，继续打包
 			}
-		}
-
-		// 交易池太小时不打包
-		if length <= 300 {
-			time.Sleep(10 * time.Millisecond)
-			continue
 		}
 
 		// 每次打包最多 blockSize 个交易
