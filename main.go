@@ -14,8 +14,8 @@ const (
 	txsCsvPath = "./filtered_transactions_11000k.csv"
 	//dataTotalNum = 30207 // 100k txsCsv数据条数
 	dataTotalNum  = 3607054 // 1100k txsCsv数据条数
-	blockSize     = 1000
-	globalBatchSz = 20000 // 从 CSV 一次拉 10000 笔
+	blockSize     = 2000
+	globalBatchSz = 10000 // 从 CSV 一次拉 10000 笔
 )
 
 var logChan = make(chan string, 100000000)
@@ -142,9 +142,10 @@ func GenerateBlock(csvPool *TxPool, done <-chan bool) {
 	blockNum := 1
 	csvFinished := false
 
-	for {
+	for !csvFinished {
 		// 如果 shardQ 不足 blockSize，先从 csvPool 拉入满足 shard 的
-		if len(shardQ.TxQueue) < blockSize {
+		//if len(shardQ.TxQueue) < blockSize {
+		if true {
 			// 批量过滤
 			filtered := make([]*Transaction, 0)
 			csvPool.lock.Lock()
@@ -227,6 +228,7 @@ func GenerateBlock(csvPool *TxPool, done <-chan bool) {
 		logChan <- fmt.Sprintf("GenerateBlock=> 完成区块 %d 打包：共 %d 笔交易", blockNum, len(txs))
 
 		blockNum++
+		//batchReq <- struct{}{}
 	}
 }
 

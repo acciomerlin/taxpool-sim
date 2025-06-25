@@ -121,7 +121,6 @@ func (tp *TaxPool) UpdateDiffAndBalance(txs []*Transaction) {
 			tp.TotalSubsidy_i.Add(tp.TotalSubsidy_i, tp.Subsidy)
 			// tp.Balance.Sub(tp.Balance, tp.Subsidy)
 			tp.DeltaBalance.Sub(tp.DeltaBalance, tp.Subsidy)
-			fee.Div(fee, big.NewInt(1))
 			if firstCTX || (minCTXFee != nil && fee.Cmp(minCTXFee) < 0) {
 				minCTXFee = new(big.Int).Set(fee)
 				firstCTX = false
@@ -144,7 +143,7 @@ func (tp *TaxPool) UpdateDiffAndBalance(txs []*Transaction) {
 
 	// 防止v2计算分子有0
 	if tp.TotalSubsidyNum.Cmp(big.NewInt(0)) == 0 {
-		tp.TotalTaxNum.Add(tp.TotalTaxNum, big.NewInt(1))
+		tp.TotalSubsidyNum.Add(tp.TotalSubsidyNum, big.NewInt(1))
 	}
 	if tp.TotalTaxNum.Cmp(big.NewInt(0)) == 0 {
 		tp.TotalTaxNum.Add(tp.TotalTaxNum, big.NewInt(1))

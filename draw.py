@@ -1,9 +1,9 @@
 from figurePlot.plot_tax_metrics_over_blocks import plot_updated_tax_metrics
 
 
-TAXPOOL_SIM_INPUT_CSV = "outputCSV/shard_20250620_010043.csv"
+TAXPOOL_SIM_INPUT_CSV = "outputCSV/shard_20250625_232755.csv"
 METHOD=3 # 3是monoxide方法
-DATE = '0617'
+DATE = '0625'
 # TYPE = 'v32_e12_12_2_018'
 TYPE = '0'
 input_csv="filtered_transactions_                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             11000k.csv"
