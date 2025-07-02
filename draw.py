@@ -1,7 +1,7 @@
 from figurePlot.plot_tax_metrics_over_blocks import plot_updated_tax_metrics
 
 
-TAXPOOL_SIM_INPUT_CSV = "outputCSV/shard_20250625_232755.csv"
+TAXPOOL_SIM_INPUT_CSV = "outputCSV/shard_20250701_114925.csv"
 METHOD=3 # 3是monoxide方法
 DATE = '0625'
 # TYPE = 'v32_e12_12_2_018'
@@ -57,6 +57,6 @@ for SHARD_NUM in shard_list:
             shard_csv_dir=onchain_s_csv,
             shard_num=SHARD_NUM,
             save_directory=save_directory,
-            alpha=0,
-            beta=0
+            beta=0.1,
+            alpha=0.01
         )

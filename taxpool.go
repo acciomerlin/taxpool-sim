@@ -6,9 +6,11 @@ import (
 	"strings"
 )
 
-const Delta = 1000000000000
-const EpsilonDelay = 1000000000000
-const EpsilonBalance = 100
+// const Delta2 = 1000000000000000  // for taxpool balance用不同步长方案
+const Delta = 100000000000                    // 10^11
+const EpsilonDelay = 10000000000000           // 10^13
+const EpsilonBalance = 100000000000000000     // 10^17
+const EpsilonDeltaBalance = 10000000000000000 // 10^16
 
 type TaxPool struct {
 	Tax             *big.Int // 最新出块区块理想情况下 itx 被收的税，被用作下一高度区块打包时 itx 实际被收的税
@@ -162,16 +164,26 @@ func (tp *TaxPool) UpdateDiffAndBalance(txs []*Transaction) {
 	if minITXFee == nil {
 		tp.F_itx_min = nil
 		tp.F_ctx_min = minCTXFee
-		tp.Diff_withsign = new(big.Int).Set(minCTXFee)
-		tp.Diff = new(big.Int).Abs(minCTXFee)
+		if len(txs) < blockSize {
+			tp.Diff_withsign = big.NewInt(0)
+			tp.Diff = big.NewInt(0)
+		} else {
+			tp.Diff_withsign = new(big.Int).Neg(minCTXFee)
+			tp.Diff = new(big.Int).Abs(minCTXFee)
+		}
 		return
 	}
 
 	if minCTXFee == nil {
 		tp.F_itx_min = minITXFee
 		tp.F_ctx_min = nil
-		tp.Diff_withsign = new(big.Int).Neg(minITXFee)
-		tp.Diff = new(big.Int).Abs(minITXFee)
+		if len(txs) < blockSize {
+			tp.Diff_withsign = big.NewInt(0)
+			tp.Diff = big.NewInt(0)
+		} else {
+			tp.Diff_withsign = new(big.Int).Set(minITXFee)
+			tp.Diff = new(big.Int).Abs(minITXFee)
+		}
 		return
 	}
 
@@ -318,20 +330,12 @@ func (tp *TaxPool) UpdateTaxAndSubsidy_v3_2(txs []*Transaction) {
 
 	// 判断是否平衡
 	delayBalanced := tp.Diff_withsign.Cmp(epsilon1) <= 0 && tp.Diff_withsign.Cmp(new(big.Int).Neg(epsilon1)) >= 0
-	taxpoolBalanced := tp.DeltaBalance.Cmp(epsilon2) <= 0 && tp.DeltaBalance.Cmp(new(big.Int).Neg(epsilon2)) >= 0
-
-	// 防止除 0
-	nItx := new(big.Int).Set(tp.TotalTaxNum)
-	nCtx := new(big.Int).Set(tp.TotalSubsidyNum)
-	if nItx.Sign() == 0 {
-		nItx = big.NewInt(1)
-	}
-	if nCtx.Sign() == 0 {
-		nCtx = big.NewInt(1)
-	}
+	//taxpoolBalanced := tp.DeltaBalance.Cmp(epsilon2) <= 0 && tp.DeltaBalance.Cmp(new(big.Int).Neg(epsilon2)) >= 0
+	taxpoolBalanced := tp.Balance.Cmp(epsilon2) <= 0 && tp.Balance.Cmp(new(big.Int).Neg(epsilon2)) >= 0 // 用balance判断
 
 	// 原始步长
 	baseDelta := big.NewInt(Delta)
+	//baseDelta2 := big.NewInt(Delta2)
 
 	// 平衡就不调整
 	if delayBalanced && taxpoolBalanced {
@@ -386,7 +390,7 @@ func (tp *TaxPool) UpdateTaxAndSubsidy_v3_2(txs []*Transaction) {
 		return
 	} else if !taxpoolBalanced {
 		// 税池偏离因子
-		balanceFactor := getFactor(tp.DeltaBalance, epsilon2)
+		balanceFactor := getFactor(tp.Balance, epsilon2)
 
 		// 计算有效的 Δ,因为可能是小数，所以用 big.Float 计算，再转回 big.Int
 		baseDeltaFloat := new(big.Float).SetInt(baseDelta)
@@ -394,7 +398,7 @@ func (tp *TaxPool) UpdateTaxAndSubsidy_v3_2(txs []*Transaction) {
 		effectiveDeltaInt := new(big.Int)
 		effectiveDelta.Int(effectiveDeltaInt)
 
-		if tp.DeltaBalance.Sign() > 0 {
+		if tp.Balance.Sign() > 0 {
 			// 税池增长：Tax - Δ、Subsidy + Δ
 			tp.Tax.Sub(tp.Tax, effectiveDeltaInt)
 			tp.Subsidy.Add(tp.Subsidy, effectiveDeltaInt)
@@ -405,4 +409,156 @@ func (tp *TaxPool) UpdateTaxAndSubsidy_v3_2(txs []*Transaction) {
 		}
 		return
 	}
+}
+
+func (tp *TaxPool) UpdateTaxAndSubsidy_v3_3(txs []*Transaction) {
+	tp.UpdateDiffAndBalance(txs)
+
+	// 容忍区间
+	epsilonDelay := big.NewInt(EpsilonDelay)
+	epsilonBalance := big.NewInt(EpsilonBalance)
+
+	// 判断时延平衡
+	delayBalanced := tp.Diff_withsign.Cmp(epsilonDelay) <= 0 && tp.Diff_withsign.Cmp(new(big.Int).Neg(epsilonDelay)) >= 0
+	// 判断balance平衡
+	taxpoolBalanced := tp.Balance.Cmp(epsilonBalance) <= 0 && tp.Balance.Cmp(new(big.Int).Neg(epsilonBalance)) >= 0
+
+	// 税收和补贴调整步长，此版本时延平衡和税池平衡调整步长统一
+	delta := big.NewInt(Delta)
+
+	// 时延平衡 && 税池平衡，不调整税收或者补贴返回
+	if delayBalanced && taxpoolBalanced {
+		return
+	}
+
+	// 优先调整时延平衡
+	if !delayBalanced {
+		delayFactor := GetFactor(tp.Diff_withsign, epsilonDelay)
+
+		// 计算 factor * delta,因可能是小数，所以先用 big.Float 计算再转回 big.Int
+		baseDeltaFloat := new(big.Float).SetInt(delta)
+		effectiveDelta := new(big.Float).Mul(baseDeltaFloat, delayFactor)
+		effectiveDeltaInt := new(big.Int)
+		effectiveDelta.Int(effectiveDeltaInt)
+
+		if tp.Diff_withsign.Sign() > 0 {
+			// ctx 时延高，ctx 竞争不过itx，加税：Tax + factor_delay * delta * (n-1), Subsidy + factor * delta
+			tp.Tax.Add(tp.Tax, new(big.Int).Mul(effectiveDeltaInt, big.NewInt(int64(ShardNum-1))))
+			tp.Subsidy.Add(tp.Subsidy, effectiveDeltaInt)
+		} else {
+			// itx 时延高，itx竞争不过ctx，减税：Tax - factor_delay * delta * (n-1), Subsidy - factor * delta
+			tp.Tax.Sub(tp.Tax, new(big.Int).Mul(effectiveDeltaInt, big.NewInt(int64(ShardNum-1))))
+			tp.Subsidy.Sub(tp.Subsidy, effectiveDeltaInt)
+		}
+		return
+	} else if !taxpoolBalanced {
+		// 税池偏离因子
+		balanceFactor := GetFactor(tp.Balance, epsilonBalance)
+
+		baseDeltaFloat := new(big.Float).SetInt(delta)
+		effectiveDelta := new(big.Float).Mul(baseDeltaFloat, balanceFactor)
+		effectiveDeltaInt := new(big.Int)
+		effectiveDelta.Int(effectiveDeltaInt)
+
+		if tp.Balance.Sign() > 0 {
+			// 税池增长，税收多了：Tax - factor_balance * delta、Subsidy + factor_balance * delta
+			tp.Tax.Sub(tp.Tax, effectiveDeltaInt)
+			tp.Subsidy.Add(tp.Subsidy, effectiveDeltaInt)
+		} else {
+			// 税池减少，税收少了：Tax + factor_balance * delta、Subsidy - factor_balance * delta
+			tp.Tax.Add(tp.Tax, effectiveDeltaInt)
+			tp.Subsidy.Sub(tp.Subsidy, effectiveDeltaInt)
+		}
+		return
+	}
+}
+
+func (tp *TaxPool) UpdateTaxAndSubsidy_v3_4(txs []*Transaction) {
+	tp.UpdateDiffAndBalance(txs)
+
+	// 3个epsilon 容忍区间
+	epsilonDelay := big.NewInt(EpsilonDelay)
+	epsilonBalance := big.NewInt(EpsilonBalance)
+	epsilonDeltaBalance := big.NewInt(EpsilonDeltaBalance)
+
+	// 调整 tax & subsidy 步长
+	delta := big.NewInt(Delta)
+
+	// 判断时延平衡
+	delayBalanced := tp.Diff_withsign.Cmp(epsilonDelay) <= 0 && tp.Diff_withsign.Cmp(new(big.Int).Neg(epsilonDelay)) >= 0
+
+	// 优先调整时延平衡
+	if !delayBalanced {
+		delayFactor := GetFactor(tp.Diff_withsign, epsilonDelay)
+
+		// 计算 factor * delta,因可能是小数，所以先用 big.Float 计算再转回 big.Int
+		baseDeltaFloat := new(big.Float).SetInt(delta)
+		effectiveDelta := new(big.Float).Mul(baseDeltaFloat, delayFactor)
+		effectiveDeltaInt := new(big.Int)
+		effectiveDelta.Int(effectiveDeltaInt)
+
+		if tp.Diff_withsign.Sign() > 0 {
+			// ctx 时延高，ctx 竞争不过itx，加税：Tax + factor_delay * delta * (n-1), Subsidy + factor * delta
+			tp.Tax.Add(tp.Tax, new(big.Int).Mul(effectiveDeltaInt, big.NewInt(int64(ShardNum-1))))
+			tp.Subsidy.Add(tp.Subsidy, effectiveDeltaInt)
+		} else {
+			// itx 时延高，itx竞争不过ctx，减税：Tax - factor_delay * delta * (n-1), Subsidy - factor * delta
+			tp.Tax.Sub(tp.Tax, new(big.Int).Mul(effectiveDeltaInt, big.NewInt(int64(ShardNum-1))))
+			tp.Subsidy.Sub(tp.Subsidy, effectiveDeltaInt)
+		}
+		return
+	}
+
+	// 先计算 factor_balance&deltabalance避免重复计算
+	balancePlusDeltabalance := new(big.Int).Add(tp.Balance, tp.DeltaBalance)
+	epsilonSum := new(big.Int).Add(epsilonBalance, epsilonDeltaBalance)
+	balanceAndDeltaBalanceFactor := GetFactor(balancePlusDeltabalance, epsilonSum)
+	baseDeltaFloat := new(big.Float).SetInt(delta)
+	effectiveDelta := new(big.Float).Mul(baseDeltaFloat, balanceAndDeltaBalanceFactor)
+	effectiveDeltaInt := new(big.Int)
+	effectiveDelta.Int(effectiveDeltaInt)
+
+	// 然后再调税池平衡
+	if tp.Balance.Cmp(big.NewInt(0)) <= 0 { // balance < 0
+		if tp.DeltaBalance.Cmp(big.NewInt(0)) <= 0 {
+			// 表格蓝色区域：+tax -subsidy
+			tp.Tax.Add(tp.Tax, effectiveDeltaInt)
+			tp.Subsidy.Sub(tp.Subsidy, effectiveDeltaInt)
+		} else {
+			if tp.Balance.Cmp(new(big.Int).Neg(epsilonBalance)) < 0 {
+				// 表格蓝色区域：+tax -subsidy
+				tp.Tax.Add(tp.Tax, effectiveDeltaInt)
+				tp.Subsidy.Sub(tp.Subsidy, effectiveDeltaInt)
+			} else {
+				if tp.DeltaBalance.Cmp(epsilonDeltaBalance) <= 0 {
+					// 表格黄色区域：tax, subsidy 不变
+				} else {
+					// 表格红色区域：-tax +subsidy
+					tp.Tax.Sub(tp.Tax, effectiveDeltaInt)
+					tp.Subsidy.Add(tp.Subsidy, effectiveDeltaInt)
+				}
+			}
+		}
+	} else { // balance > 0
+		if tp.DeltaBalance.Cmp(big.NewInt(0)) > 0 {
+			// 表格红色区域：-tax +subsidy
+			tp.Tax.Sub(tp.Tax, effectiveDeltaInt)
+			tp.Subsidy.Add(tp.Subsidy, effectiveDeltaInt)
+		} else {
+			if tp.Balance.Cmp(epsilonBalance) > 0 {
+				// 表格红色区域：-tax +subsidy
+				tp.Tax.Sub(tp.Tax, effectiveDeltaInt)
+				tp.Subsidy.Add(tp.Subsidy, effectiveDeltaInt)
+			} else {
+				if tp.DeltaBalance.Cmp(new(big.Int).Neg(epsilonDeltaBalance)) > 0 {
+					// 表格黄色区域：tax, subsidy 不变
+				} else {
+					// 表格蓝色区域：+tax -subsidy
+					tp.Tax.Add(tp.Tax, effectiveDeltaInt)
+					tp.Subsidy.Sub(tp.Subsidy, effectiveDeltaInt)
+				}
+			}
+		}
+	}
+
 }

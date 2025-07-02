@@ -63,13 +63,16 @@ func main() {
 		RelayPool: make(map[uint64][]*Transaction),
 	}
 
-	go ReadTxsCSV(csvTxPool, done)
+	go ReadTxsCSV_SegmentAndRepeat(csvTxPool, done)
 
 	// 3) 触发第一次批量读取
 	batchReq <- struct{}{}
 
 	// 4) 启动打包协程
 	GenerateBlock(csvTxPool, done)
+
+	// 停止读取协程
+	close(batchReq)
 
 	// 确保 logChan 输出完后退出
 	time.Sleep(3 * time.Second)
@@ -131,6 +134,198 @@ func ReadTxsCSV(txpool *TxPool, done chan<- bool) {
 	duration := time.Since(start)
 	logChan <- fmt.Sprintf("ReadTxsCSV=> TxsCSV 读取完成，共 %d 笔交易，用时 %.2f 秒", nowDataNum, duration.Seconds())
 	done <- true // 通知主线程“读取完毕”
+}
+
+var originalTxs []*Transaction // 存储原始10000笔交易
+
+// 只读取一次CSV，然后循环复用
+func ReadTxsCSV_repeat(txpool *TxPool, done chan<- bool) {
+	//start := time.Now()
+	nowDataNum := 0
+	maxRepeatNum := 10000 // 循环使用这10000笔
+
+	txfile, err := os.Open(txsCsvPath)
+	if err != nil {
+		log.Panic(err)
+	}
+	defer txfile.Close()
+	reader := csv.NewReader(txfile)
+
+	// ========== 一次性读取 10000 笔 ==========
+	for i := 0; i < maxRepeatNum; i++ {
+		data, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			log.Panic(err)
+		}
+		if tx, ok := data2tx(data, uint64(nowDataNum)); ok {
+			originalTxs = append(originalTxs, tx)
+			nowDataNum++
+		}
+	}
+	fmt.Println("✅ ReadTxsCSV => 首次读取 %d 笔交易成功，开始循环复用...", nowDataNum)
+
+	// ========== 循环监听 batchReq，复制复用 ==========
+	for {
+		_, ok := <-batchReq
+		if !ok {
+			break
+		}
+		txpool.lock.Lock()
+		for _, tx := range originalTxs {
+			cloned := *tx            // 浅拷贝
+			cloned.Time = time.Now() // 时间更新
+			txpool.TxQueue = append(txpool.TxQueue, &cloned)
+		}
+		txpool.lock.Unlock()
+	}
+	fmt.Println("ReadTxsCSV => 停止复用交易")
+	done <- true
+}
+
+func ReadTxsCSV_repeat10w211w(txpool *TxPool, done chan<- bool) {
+	start := time.Now()
+	nowDataNum := 0
+	startRepeatIdx := 100000
+	endRepeatIdx := 110000
+
+	txfile, err := os.Open(txsCsvPath)
+	if err != nil {
+		log.Panic(err)
+	}
+	defer txfile.Close()
+	reader := csv.NewReader(txfile)
+
+	// 预分配空间
+	initialTxs := make([]*Transaction, 0, startRepeatIdx)
+	repeatTxs := make([]*Transaction, 0, endRepeatIdx-startRepeatIdx)
+
+	// 一次性读入 0 - 11w
+	for nowDataNum < endRepeatIdx {
+		data, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			log.Panic(err)
+		}
+		if tx, ok := data2tx(data, uint64(nowDataNum)); ok {
+			if nowDataNum < startRepeatIdx {
+				initialTxs = append(initialTxs, tx)
+			} else {
+				repeatTxs = append(repeatTxs, tx)
+			}
+			nowDataNum++
+		}
+	}
+
+	// 注入 0 ~ 10w（仅一次）
+	txpool.lock.Lock()
+	for _, tx := range initialTxs {
+		txpool.TxQueue = append(txpool.TxQueue, tx)
+	}
+	txpool.lock.Unlock()
+	fmt.Printf("ReadTxsCSV => 已注入前 %d 笔交易\n", len(initialTxs))
+
+	// 等待 batchReq，循环注入 10w ~ 11w
+	fmt.Printf("ReadTxsCSV => 开始循环注入 %d 笔交易\n", len(repeatTxs))
+	for {
+		_, ok := <-batchReq
+		if !ok {
+			break
+		}
+		txpool.lock.Lock()
+		for _, tx := range repeatTxs {
+			cloned := *tx
+			cloned.Time = time.Now()
+			txpool.TxQueue = append(txpool.TxQueue, &cloned)
+		}
+		txpool.lock.Unlock()
+	}
+	fmt.Println("ReadTxsCSV => 停止注入交易")
+
+	end := time.Now()
+	duration := end.Sub(start)
+	fmt.Printf("ReadTxsCSV => 总耗时 %.2f 秒，终止时间：%s\n", duration.Seconds(), end.Format("2006-01-02 15:04:05"))
+
+	done <- true
+}
+
+func ReadTxsCSV_SegmentAndRepeat(txpool *TxPool, done chan<- bool) {
+	start := time.Now()
+	txfile, err := os.Open(txsCsvPath)
+	if err != nil {
+		log.Panic(err)
+	}
+	defer txfile.Close()
+	reader := csv.NewReader(txfile)
+
+	totalNeeded := 1100000 // 读取 0~11w
+	allTxs := make([]*Transaction, 0, totalNeeded)
+
+	// ===== 1. 一次性读入前 11w 交易 =====
+	idx := 0
+	for idx < totalNeeded {
+		data, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			log.Panic(err)
+		}
+		if tx, ok := data2tx(data, uint64(idx)); ok {
+			allTxs = append(allTxs, tx)
+			idx++
+		}
+	}
+	fmt.Printf("✅ 已读取 %d 笔交易（0~11w），开始按需注入...\n", len(allTxs))
+
+	// ✅ 正确设置循环使用的交易子集（10w ~ 11w）
+	repeatTxs := allTxs[1000000:1010000]
+
+	// ===== 2. 请求控制注入 =====
+	batchCount := 0
+
+	for {
+		_, ok := <-batchReq
+		if !ok {
+			break
+		}
+
+		if batchCount < 100 {
+			// 注入前10w
+			startIdx := batchCount * 10000
+			endIdx := (batchCount + 1) * 10000
+			if endIdx > 1000000 {
+				endIdx = 1000000
+			}
+			txpool.lock.Lock()
+			for _, tx := range allTxs[startIdx:endIdx] {
+				txpool.TxQueue = append(txpool.TxQueue, tx)
+			}
+			txpool.lock.Unlock()
+			fmt.Printf("📦 第 %d 次注入：%d ~ %d\n", batchCount+1, startIdx, endIdx-1)
+		} else {
+			// 之后每次循环注入10w~11w
+			txpool.lock.Lock()
+			for _, tx := range repeatTxs {
+				cloned := *tx
+				cloned.Time = time.Now()
+				txpool.TxQueue = append(txpool.TxQueue, &cloned)
+			}
+			txpool.lock.Unlock()
+			fmt.Printf("🔁 循环注入第 %d 次 10w~11w 交易（共 %d）\n", batchCount-9, len(repeatTxs))
+		}
+		batchCount++
+	}
+
+	fmt.Println("🚪 读取线程结束，已完成全部注入")
+	done <- true
+
+	duration := time.Since(start)
+	fmt.Printf("ReadTxsCSV => 总耗时 %.2f 秒，终止时间：%s\n", duration.Seconds(), time.Now().Format("2006-01-02 15:04:05"))
 }
 
 // GenerateBlock_version_timeSleep 负责打包交易并输出记录,用 time sleep控制出块间隔版本
@@ -197,7 +392,7 @@ func GenerateBlock(csvPool *TxPool, done <-chan bool) {
 
 		// 更新 taxpool
 		//taxpool.UpdateDiffAndBalance(txs) //看 f_itx_min和f_ctx_min是否符合预期调试
-		taxpool.UpdateTaxAndSubsidy_v3_2(txs)
+		taxpool.UpdateTaxAndSubsidy_v3_4(txs)
 
 		end := time.Now()
 		interval := time.Duration(0)
@@ -224,11 +419,16 @@ func GenerateBlock(csvPool *TxPool, done <-chan bool) {
 			BlockInterval: interval,
 		}
 
-		//fmt.Printf("✅ 完成区块 %d 打包：共 %d 笔交易\n", blockNum, len(txs))
+		//fmt.Printf("完成区块 %d 打包：共 %d 笔交易\n", blockNum, len(txs))
 		logChan <- fmt.Sprintf("GenerateBlock=> 完成区块 %d 打包：共 %d 笔交易", blockNum, len(txs))
 
 		blockNum++
 		//batchReq <- struct{}{}
+
+		if blockNum > 600 {
+			fmt.Println("达到 600 个区块，终止出块")
+			break
+		}
 	}
 }
 

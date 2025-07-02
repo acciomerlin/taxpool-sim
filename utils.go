@@ -20,7 +20,6 @@ func Addr2Shard(addr Address) int {
 }
 
 // transform data to transaction
-// check whether it is a legal txs message. if so, read txs and put it into the txlist
 func data2tx(data []string, nonce uint64) (*Transaction, bool) {
 	if data[6] == "0" && data[7] == "0" && len(data[3]) > 16 && len(data[4]) > 16 && data[3] != data[4] {
 
@@ -61,10 +60,26 @@ func safeStr(v *big.Int) string {
 	return v.String()
 }
 
-//func isRelay1(tx *Transaction) bool {
-//	return isCtx(tx.Sender, tx.Recipient)
-//}
-//
-//func isRelay2(tx *Transaction) bool {
-//	return false // 如果你有 relay2 的判断逻辑可以改掉
-//}
+// GetFactor factor计算函数，根据当前偏离值和epsilon容忍区间决定
+func GetFactor(deviation, epsilon *big.Int) *big.Float {
+	absDev := new(big.Float).SetInt(new(big.Int).Abs(deviation))
+	eps := new(big.Float).SetInt(epsilon)
+
+	if eps.Cmp(big.NewFloat(0)) == 0 {
+		return big.NewFloat(1.0)
+	}
+
+	factor := new(big.Float).Quo(absDev, eps)
+
+	// 上下界
+	minFactor := big.NewFloat(1)
+	maxFactor := big.NewFloat(8.0)
+
+	if factor.Cmp(minFactor) < 0 {
+		return minFactor
+	}
+	if factor.Cmp(maxFactor) > 0 {
+		return maxFactor
+	}
+	return factor
+}

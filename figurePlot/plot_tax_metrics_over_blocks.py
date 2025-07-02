@@ -32,7 +32,7 @@ def plot_updated_tax_metrics(method: int, shard_csv_dir: str, shard_num: int,
         
 
         # ------- 创建图和三个子图 -------
-        fig, axes = plt.subplots(1, 3, figsize=(36, 6), dpi=300, sharex=True, gridspec_kw={'wspace': 0.25})
+        fig, axes = plt.subplots(1, 4, figsize=(36, 6), dpi=300, sharex=True, gridspec_kw={'wspace': 0.25})
         fig.suptitle(f"Shard {shard_id} Metrics Overview\nMethod={method}, α={alpha}, β={beta}", fontsize=14)
 
         # 设置一组不重复的颜色
@@ -93,29 +93,38 @@ def plot_updated_tax_metrics(method: int, shard_csv_dir: str, shard_num: int,
         ax2.grid(True, linestyle="--", alpha=0.6)
         ax2.legend()
 
-        # --- Subplot 3: Balance & DeltaBalance ---
+        # --- Subplot 3: Balance（含上下阈值）---
         ax3 = axes[2]
-        ax3_right = ax3.twinx()
+        ax3.plot(block_height, balance, marker='o', markersize=3, color=colors[4], label="Balance")
+        ax3.axhline(beta, color="gray", linestyle="--", label=f"+EpsilonBalance")
+        ax3.axhline(-beta, color="gray", linestyle="--", label=f"-EpsilonBalance")
+        ax3.axhline(0, color="black", linestyle=":", linewidth=1)
 
-        p3, = ax3.plot(block_height, balance, marker='o', markersize=3, color=colors[4], label="Balance")
-        p4, = ax3_right.plot(block_height, deltabalance, marker='^', markersize=3, linestyle='--', color=colors[5], label="ΔBalance")
-
-        # 缺失值标记
+        # 标记缺失值
         ax3.plot(block_height[balance.isna()], [0]*balance.isna().sum(), 'rx', label="Missing Balance")
-        ax3_right.plot(block_height[deltabalance.isna()], [0]*deltabalance.isna().sum(), 'r+', label="Missing ΔBalance")
-
-        # 添加 balance=0 的横线，并将其也加入图例
-        zero_line = ax3.axhline(0, color="#c57def", linestyle="--", linewidth=1, label="Balance=0")
-        zero_line2 = ax3_right.axhline(0, color="#ef063d", linestyle="--", linewidth=1, label="ΔBalance=0")
 
         ax3.set_xlabel("Block Height")
         ax3.set_ylabel("Balance (ETH)")
-        ax3_right.set_ylabel("ΔBalance (ETH)")
+        # ax3.set_title("Balance with ±β Threshold")
         ax3.grid(True, linestyle="--", alpha=0.4)
-        ax3_right.grid(True, linestyle="--", alpha=0.4)
+        ax3.legend()
 
-        # 将三条线都加入图例
-        ax3.legend(handles=[p3, p4, zero_line, zero_line2], loc='lower left')
+        # --- Subplot 4: ΔBalance（含上下阈值）---
+        ax4 = axes[3]
+        ax4.plot(block_height, deltabalance, marker='^', markersize=3, linestyle='--', color=colors[5], label="ΔBalance")
+        ax4.axhline(alpha, color="gray", linestyle="--", label=f"+EpsilonΔBalance")
+        ax4.axhline(-alpha, color="gray", linestyle="--", label=f"-EpsilonΔBalance")
+        ax4.axhline(0, color="black", linestyle=":", linewidth=1)
+
+        # 标记缺失值
+        ax4.plot(block_height[deltabalance.isna()], [0]*deltabalance.isna().sum(), 'r+', label="Missing ΔBalance")
+
+        ax4.set_xlabel("Block Height")
+        ax4.set_ylabel("ΔBalance (ETH)")
+        # ax4.set_title("ΔBalance with ±α Threshold")
+        ax4.grid(True, linestyle="--", alpha=0.4)
+        ax4.legend()
+
 
         # # --- Subplot 3: Balance & DeltaBalance (symlog) ---
         # ax3 = axes[2]
